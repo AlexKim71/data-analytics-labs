@@ -1,3 +1,5 @@
+!pip install datasets librosa -q
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.fftpack import fft
@@ -5,42 +7,95 @@ from sklearn.svm import SVC
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, confusion_matrix
+from datasets import load_dataset
 
-def generate_synthetic_audio(freq, duration=0.5, sr=16000):
-    t = np.linspace(0, duration, int(sr * duration))
-    signal = 0.5 * np.sin(2 * np.pi * freq * t) + 0.1 * np.random.randn(len(t))
-    return signal
+SR = 16000  # частота дискретизації
 
-data = generate_synthetic_audio(300)
+# Завантажуємо датасет БЕЗ cast_column: у цьому датасеті колонка audio
+# вже містить готові масиви семплів, а не файли для декодування
+dataset = load_dataset("MLSpeech/hillenbrand_vowels", split="train")
+print(dataset.features)
 
+
+def get_audio(item):
+    """Повертає аудіо як numpy-масив незалежно від формату колонки."""
+    a = item['audio']
+    if isinstance(a, dict) and 'array' in a:
+        return np.array(a['array'], dtype=np.float32)
+    if isinstance(a, str):
+        # у датасеті аудіо збережене як текст '[0.0, -0.0078, ...]'
+        s = a.replace('[', ' ').replace(']', ' ').replace('...', ' ')
+        parts = [p for p in s.replace('\n', ' ').split(',') if p.strip()]
+        return np.array([float(p) for p in parts], dtype=np.float32)
+    return np.array(a, dtype=np.float32)
+
+
+unique_vowels = dataset.unique('vowel')
+target_vowels = unique_vowels[:3]
+print(f"Будемо класифікувати голосні: {target_vowels[0]}, {target_vowels[1]}, {target_vowels[2]}")
+
+sound_1, sound_2, sound_3 = [], [], []
+
+for item in dataset:
+    vowel = item['vowel']
+    if vowel not in target_vowels:
+        continue
+
+    audio = get_audio(item)
+
+    if len(audio) < 1000:
+        continue
+
+    if vowel == target_vowels[0] and len(sound_1) < 5:
+        sound_1.append(audio)
+    elif vowel == target_vowels[1] and len(sound_2) < 5:
+        sound_2.append(audio)
+    elif vowel == target_vowels[2] and len(sound_3) < 5:
+        sound_3.append(audio)
+
+    if len(sound_1) == 5 and len(sound_2) == 5 and len(sound_3) == 5:
+        break
+
+print(f"Завантажено реальних зразків: {target_vowels[0]}={len(sound_1)}, "
+      f"{target_vowels[1]}={len(sound_2)}, {target_vowels[2]}={len(sound_3)}")
+
+# ==========================================
+# ГРАФІК 1: Сигнал у часовій області
+# ==========================================
 plt.figure(figsize=(8, 5))
-plt.plot(data[:1000])
-plt.title('Сигнал у часовій області (Звук У)')
+plt.plot(sound_1[0])
+plt.title(f'Сигнал у часовій області (Звук {target_vowels[0]})')
 plt.xlabel('Зразки')
 plt.ylabel('Амплітуда')
 plt.show()
 
-N = len(data)
-fft_data = fft(data)
-frequencies = np.fft.fftfreq(N, 1/16000)
+# ==========================================
+# ГРАФІК 2: Спектр сигналу
+# ==========================================
+N = len(sound_1[0])
+fft_data = fft(sound_1[0])
+frequencies = np.fft.fftfreq(N, 1 / SR)
 
 plt.figure(figsize=(8, 5))
-plt.plot(frequencies[:N//2], np.abs(fft_data[:N//2]))
-plt.title('Спектр сигналу (Частотна область)')
+plt.plot(frequencies[:N // 2], np.abs(fft_data[:N // 2]))
+plt.title(f'Спектр сигналу (Звук {target_vowels[0]})')
 plt.xlabel('Частота (Гц)')
 plt.ylabel('Амплітуда')
 plt.show()
 
+# ==========================================
+# ГРАФІК 3: Переходи через нуль
+# ==========================================
 num_segments = 10
-step = len(data) // num_segments
-
+step = len(sound_1[0]) // num_segments
 zero_crossings = [
-    np.sum(np.diff(np.sign(data[i:i + step])) != 0)
-    for i in range(0, len(data), step)
+    np.sum(np.diff(np.sign(sound_1[0][i:i + step])) != 0)
+    for i in range(0, step * num_segments, step)  # рівно 10 сегментів
 ]
 
 zero_crossings = np.array(zero_crossings)
-normalized_crossings = zero_crossings / zero_crossings.max()
+normalized_crossings = (zero_crossings / zero_crossings.max()
+                        if zero_crossings.max() > 0 else zero_crossings)
 
 plt.figure(figsize=(8, 5))
 plt.plot(normalized_crossings, 'b-o')
@@ -50,38 +105,40 @@ plt.title('Кількість переходів через нуль у сегм
 plt.grid(True)
 plt.show()
 
-def extract_features(data, sample_rate=16000):
+# ==========================================
+# ВИДІЛЕННЯ ОЗНАК ТА НАВЧАННЯ RBF-МЕРЕЖІ
+# ==========================================
+def extract_features(data, sample_rate=SR):
     mean_val = np.mean(data)
     std_val = np.std(data)
-    energy = np.sum(data**2)
+    energy = np.sum(data ** 2)
     zcr = np.sum(np.diff(np.sign(data)) != 0)
-    N = len(data)
-    fft_data = fft(data)
-    freqs = np.fft.fftfreq(N, 1/sample_rate)
-    max_freq = freqs[np.argmax(np.abs(fft_data[:N//2]))]
+    n = len(data)
+    fft_vals = fft(data)
+    freqs = np.fft.fftfreq(n, 1 / sample_rate)
+    max_freq = freqs[np.argmax(np.abs(fft_vals[:n // 2]))]
     return [mean_val, std_val, zcr, energy, max_freq]
 
-sound_U = [generate_synthetic_audio(300) for _ in range(5)]
-sound_Yu = [generate_synthetic_audio(500) for _ in range(5)]
-sound_E = [generate_synthetic_audio(700) for _ in range(5)]
 
 X = []
 y = []
 
-for audio in sound_U:
+for audio in sound_1:
     X.append(extract_features(audio))
     y.append(0)
-for audio in sound_Yu:
+for audio in sound_2:
     X.append(extract_features(audio))
     y.append(1)
-for audio in sound_E:
+for audio in sound_3:
     X.append(extract_features(audio))
     y.append(2)
 
 X = np.array(X)
 y = np.array(y)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.4, random_state=42, stratify=y
+)
 
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
