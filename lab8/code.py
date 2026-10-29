@@ -11,23 +11,59 @@ def generate_synthetic_audio(freq, duration=0.5, sr=16000):
     signal = 0.5 * np.sin(2 * np.pi * freq * t) + 0.1 * np.random.randn(len(t))
     return signal
 
-sound_U = [generate_synthetic_audio(300) for _ in range(5)]
-sound_Yu = [generate_synthetic_audio(500) for _ in range(5)]
-sound_E = [generate_synthetic_audio(700) for _ in range(5)]
+data = generate_synthetic_audio(300)
+
+plt.figure(figsize=(8, 5))
+plt.plot(data[:1000])
+plt.title('Сигнал у часовій області (Звук У)')
+plt.xlabel('Зразки')
+plt.ylabel('Амплітуда')
+plt.show()
+
+N = len(data)
+fft_data = fft(data)
+frequencies = np.fft.fftfreq(N, 1/16000)
+
+plt.figure(figsize=(8, 5))
+plt.plot(frequencies[:N//2], np.abs(fft_data[:N//2]))
+plt.title('Спектр сигналу (Частотна область)')
+plt.xlabel('Частота (Гц)')
+plt.ylabel('Амплітуда')
+plt.show()
+
+num_segments = 10
+step = len(data) // num_segments
+
+zero_crossings = [
+    np.sum(np.diff(np.sign(data[i:i + step])) != 0)
+    for i in range(0, len(data), step)
+]
+
+zero_crossings = np.array(zero_crossings)
+normalized_crossings = zero_crossings / zero_crossings.max()
+
+plt.figure(figsize=(8, 5))
+plt.plot(normalized_crossings, 'b-o')
+plt.xlabel('Індекс сегменту')
+plt.ylabel('Нормалізовані переходи через нуль')
+plt.title('Кількість переходів через нуль у сегментах')
+plt.grid(True)
+plt.show()
 
 def extract_features(data, sample_rate=16000):
     mean_val = np.mean(data)
     std_val = np.std(data)
     energy = np.sum(data**2)
-    zero_crossings = np.sum(np.diff(np.sign(data)) != 0)
-    
+    zcr = np.sum(np.diff(np.sign(data)) != 0)
     N = len(data)
     fft_data = fft(data)
     freqs = np.fft.fftfreq(N, 1/sample_rate)
-    max_freq_idx = np.argmax(np.abs(fft_data[:N//2]))
-    max_freq = freqs[max_freq_idx]
-    
-    return [mean_val, std_val, zero_crossings, energy, max_freq]
+    max_freq = freqs[np.argmax(np.abs(fft_data[:N//2]))]
+    return [mean_val, std_val, zcr, energy, max_freq]
+
+sound_U = [generate_synthetic_audio(300) for _ in range(5)]
+sound_Yu = [generate_synthetic_audio(500) for _ in range(5)]
+sound_E = [generate_synthetic_audio(700) for _ in range(5)]
 
 X = []
 y = []
@@ -35,36 +71,15 @@ y = []
 for audio in sound_U:
     X.append(extract_features(audio))
     y.append(0)
-
 for audio in sound_Yu:
     X.append(extract_features(audio))
     y.append(1)
-
 for audio in sound_E:
     X.append(extract_features(audio))
     y.append(2)
 
 X = np.array(X)
 y = np.array(y)
-
-plt.figure(figsize=(12, 5))
-
-plt.subplot(1, 2, 1)
-plt.plot(sound_U[0][:1000])
-plt.title('Сигнал в часовій області (Звук У)')
-plt.xlabel('Зразки')
-plt.ylabel('Амплітуда')
-
-plt.subplot(1, 2, 2)
-fft_example = fft(sound_U[0])
-freqs_example = np.fft.fftfreq(len(sound_U[0]), 1/16000)
-plt.plot(freqs_example[:len(freqs_example)//2], np.abs(fft_example[:len(freqs_example)//2]))
-plt.title('Спектр сигналу (Звук У)')
-plt.xlabel('Частота (Гц)')
-plt.ylabel('Амплітуда')
-
-plt.tight_layout()
-plt.show()
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
